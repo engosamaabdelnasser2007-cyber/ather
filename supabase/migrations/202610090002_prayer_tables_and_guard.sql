@@ -81,8 +81,8 @@ alter table public.prayer_logs
 
 -- The app upserts on (user_id, date, prayer). Never delete duplicates automatically.
 -- Abort with a clear message if existing data cannot safely support this unique key.
-do $
-begin
+DO $block$
+BEGIN
   if exists (
     select 1 from public.prayer_logs
     where user_id is null or date is null or prayer is null
@@ -96,14 +96,15 @@ begin
   ) then
     raise exception 'migration_blocked: duplicate (user_id,date,prayer) rows exist; resolve manually before migration';
   end if;
-end $;
+END;
+$block$;
 
 create unique index if not exists prayer_logs_user_date_prayer_uidx
   on public.prayer_logs (user_id, date, prayer);
 
 -- Cache upsert also depends on a unique key. Existing nulls/duplicates must be reviewed.
-do $
-begin
+DO $block$
+BEGIN
   if exists (
     select 1 from public.prayer_times_cache
     where city is null or country is null or date is null
@@ -117,7 +118,8 @@ begin
   ) then
     raise exception 'migration_blocked: duplicate (city,country,date) cache rows exist; resolve manually before migration';
   end if;
-end $;
+END;
+$block$;
 
 create unique index if not exists prayer_times_cache_city_country_date_uidx
   on public.prayer_times_cache (city, country, date);
@@ -217,6 +219,13 @@ begin
       raise exception 'prayer_not_yet_due' using errcode = 'P0001';
     end if;
   else
+    -- Fail closed: invalid time zones or missing times must never bypass due-time checks.
+    if t.tz is null or not exists (
+      select 1 from pg_catalog.pg_timezone_names z where z.name = t.tz
+    ) then
+      raise exception 'invalid_prayer_timezone' using errcode = '22023';
+    end if;
+
     local_now := now() at time zone t.tz;
     due_time := case new.prayer
       when 'fajr' then t.fajr
@@ -225,6 +234,11 @@ begin
       when 'maghrib' then t.maghrib
       when 'isha' then t.isha
     end;
+
+    if local_now is null or due_time is null then
+      raise exception 'prayer_time_data_incomplete' using errcode = 'P0001';
+    end if;
+
     if new.date > local_now::date
        or (new.date = local_now::date and local_now::time < due_time) then
       raise exception 'prayer_not_yet_due' using errcode = 'P0001';
