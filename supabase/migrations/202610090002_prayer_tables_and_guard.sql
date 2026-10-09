@@ -215,7 +215,12 @@ begin
     if new.source <> 'manual' then
       raise exception 'prayer_times_unavailable' using errcode = 'P0001';
     end if;
-    if new.date > (now() at time zone coalesce(p.timezone, 'Africa/Cairo'))::date then
+    if p.timezone is null or not exists (
+      select 1 from pg_catalog.pg_timezone_names z where z.name = p.timezone
+    ) then
+      raise exception 'invalid_profile_timezone' using errcode = '22023';
+    end if;
+    if new.date > (now() at time zone p.timezone)::date then
       raise exception 'prayer_not_yet_due' using errcode = 'P0001';
     end if;
   else
