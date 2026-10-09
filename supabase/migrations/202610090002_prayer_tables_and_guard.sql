@@ -46,12 +46,81 @@ create table if not exists public.prayer_logs (
   unique (user_id, date, prayer)
 );
 
+-- Extend pre-existing tables too. CREATE TABLE IF NOT EXISTS alone does not
+-- add columns when a table already exists.
+alter table public.profiles
+  add column if not exists city text,
+  add column if not exists country text,
+  add column if not exists timezone text not null default 'Africa/Cairo',
+  add column if not exists updated_at timestamptz not null default now();
+
+alter table public.prayer_times_cache
+  add column if not exists city text,
+  add column if not exists country text,
+  add column if not exists date date,
+  add column if not exists fajr time,
+  add column if not exists dhuhr time,
+  add column if not exists asr time,
+  add column if not exists maghrib time,
+  add column if not exists isha time,
+  add column if not exists tz text,
+  add column if not exists updated_at timestamptz not null default now();
+
+alter table public.prayer_logs
+  add column if not exists source text not null default 'live',
+  add column if not exists prayed_at time,
+  add column if not exists added_at timestamptz not null default now(),
+  add column if not exists completed_at timestamptz;
+
 -- Compatibility with the current app data layer, which reads/writes timing,
 -- progress, and updated_at. Safe for existing tables: only adds missing columns.
 alter table public.prayer_logs
   add column if not exists timing text,
   add column if not exists progress integer,
   add column if not exists updated_at timestamptz not null default now();
+
+-- The app upserts on (user_id, date, prayer). Never delete duplicates automatically.
+-- Abort with a clear message if existing data cannot safely support this unique key.
+do $
+begin
+  if exists (
+    select 1 from public.prayer_logs
+    where user_id is null or date is null or prayer is null
+  ) then
+    raise exception 'migration_blocked: prayer_logs has null identity fields; inspect rows first';
+  end if;
+  if exists (
+    select 1 from public.prayer_logs
+    group by user_id, date, prayer
+    having count(*) > 1
+  ) then
+    raise exception 'migration_blocked: duplicate (user_id,date,prayer) rows exist; resolve manually before migration';
+  end if;
+end $;
+
+create unique index if not exists prayer_logs_user_date_prayer_uidx
+  on public.prayer_logs (user_id, date, prayer);
+
+-- Cache upsert also depends on a unique key. Existing nulls/duplicates must be reviewed.
+do $
+begin
+  if exists (
+    select 1 from public.prayer_times_cache
+    where city is null or country is null or date is null
+  ) then
+    raise exception 'migration_blocked: prayer_times_cache has null key fields; inspect rows first';
+  end if;
+  if exists (
+    select 1 from public.prayer_times_cache
+    group by city, country, date
+    having count(*) > 1
+  ) then
+    raise exception 'migration_blocked: duplicate (city,country,date) cache rows exist; resolve manually before migration';
+  end if;
+end $;
+
+create unique index if not exists prayer_times_cache_city_country_date_uidx
+  on public.prayer_times_cache (city, country, date);
 
 create index if not exists prayer_logs_user_date_idx
   on public.prayer_logs (user_id, date desc);
@@ -63,7 +132,7 @@ alter table public.prayer_logs enable row level security;
 alter table public.prayer_times_cache enable row level security;
 
 -- سياسات الجداول الشخصية. السياسات permissive الموجودة مسبقًا لا تزال قد تتسع بمنطق OR؛
--- راجعها في SQL Editor قبل الإنتاج.
+-- راجعها في SQL Editor قبل الإنتاج. لا تحذف هذه السياسات تلقائيًا؛ قد تكون مخصصة لميزات أخرى.
 drop policy if exists "profiles_select_own" on public.profiles;
 create policy "profiles_select_own" on public.profiles
   for select to authenticated using (id = (select auth.uid()));
