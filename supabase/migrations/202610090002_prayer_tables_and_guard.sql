@@ -46,6 +46,13 @@ create table if not exists public.prayer_logs (
   unique (user_id, date, prayer)
 );
 
+-- Compatibility with the current app data layer, which reads/writes timing,
+-- progress, and updated_at. Safe for existing tables: only adds missing columns.
+alter table public.prayer_logs
+  add column if not exists timing text,
+  add column if not exists progress integer,
+  add column if not exists updated_at timestamptz not null default now();
+
 create index if not exists prayer_logs_user_date_idx
   on public.prayer_logs (user_id, date desc);
 create index if not exists prayer_times_cache_city_date_idx
