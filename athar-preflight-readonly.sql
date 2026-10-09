@@ -1,43 +1,64 @@
--- أثر: فحص قراءة فقط قبل أي تعديل على Supabase.
--- لا يعدّل ولا يحذف أي بيانات. شغّله في SQL Editor أولًا.
+-- أثر: فحص قراءة فقط لاكتشاف مخطط قاعدة البيانات الفعلي.
+-- هذا الملف لا ينشئ ولا يعدّل ولا يحذف أي بيانات أو سياسات.
+-- شغّله في Supabase SQL Editor، ثم أرسل النتائج مع إخفاء أي بيانات شخصية.
 
--- 1) تحقق من وجود الأعمدة التي تعتمد عليها مسودة الحارس.
-select table_name, column_name, data_type, is_nullable
+-- 1) كل الجداول والـ views الموجودة في public.
+select table_schema, table_name, table_type
+from information_schema.tables
+where table_schema = 'public'
+order by table_type, table_name;
+
+-- 2) كل أعمدة الجداول في public. هذا يساعدنا نعرف الاسم الحقيقي لجدول تسجيل الصلاة.
+select table_name, ordinal_position, column_name, data_type, is_nullable, column_default
 from information_schema.columns
 where table_schema = 'public'
-  and table_name in ('profiles', 'prayer_logs', 'prayer_times_cache')
 order by table_name, ordinal_position;
 
--- 2) اعرض سياسات RLS الحالية. سياسات permissive تتجمع بمنطق OR.
+-- 3) سياسات RLS لكل جداول public.
+-- انتبه: السياسات permissive عادةً تتجمع بمنطق OR؛ وجود سياسة واسعة قد يضعف سياسة أخرى.
 select schemaname, tablename, policyname, permissive, roles, cmd, qual, with_check
 from pg_policies
 where schemaname = 'public'
-  and tablename in ('profiles', 'prayer_logs', 'prayer_times_cache')
 order by tablename, policyname;
 
--- 3) تحقق من تفعيل RLS و FORCE RLS.
+-- 4) حالة RLS على الجداول الفعلية.
 select n.nspname as schema_name, c.relname as table_name,
        c.relrowsecurity as rls_enabled, c.relforcerowsecurity as force_rls
 from pg_class c
 join pg_namespace n on n.oid = c.relnamespace
 where n.nspname = 'public'
-  and c.relname in ('profiles', 'prayer_logs', 'prayer_times_cache')
+  and c.relkind in ('r','p')
 order by c.relname;
 
--- 4) اعرض الفهارس والقيود الحالية قبل إضافة أي قيد.
-select indexname, indexdef
+-- 5) كل الفهارس الموجودة في public.
+select schemaname, tablename, indexname, indexdef
 from pg_indexes
-where schemaname = 'public' and tablename = 'prayer_logs'
-order by indexname;
+where schemaname = 'public'
+order by tablename, indexname;
 
-select conname, contype, convalidated, pg_get_constraintdef(oid) as definition
-from pg_constraint
-where conrelid = to_regclass('public.prayer_logs')
-order by conname;
+-- 6) كل القيود الموجودة في جداول public.
+select n.nspname as schema_name, c.relname as table_name,
+       con.conname, con.contype, con.convalidated,
+       pg_get_constraintdef(con.oid) as definition
+from pg_constraint con
+join pg_class c on c.oid = con.conrelid
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public'
+order by c.relname, con.conname;
 
--- 5) اعرض المشغلات الموجودة لتجنب استبدال مشغل غير متعلق.
-select trigger_name, event_manipulation, action_timing, action_statement
+-- 7) كل المشغلات الموجودة في جداول public.
+select event_object_table as table_name, trigger_name,
+       event_manipulation, action_timing, action_statement
 from information_schema.triggers
 where event_object_schema = 'public'
-  and event_object_table = 'prayer_logs'
-order by trigger_name, event_manipulation;
+order by event_object_table, trigger_name, event_manipulation;
+
+-- 8) دوال public المرتبطة بالمشغلات أو التطبيق (الأسماء والتواقيع فقط).
+select n.nspname as schema_name, p.proname as function_name,
+       pg_get_function_identity_arguments(p.oid) as arguments,
+       pg_get_function_result(p.oid) as result_type,
+       p.prosecdef as security_definer
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+order by p.proname;
