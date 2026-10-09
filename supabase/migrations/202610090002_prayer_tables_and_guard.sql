@@ -174,6 +174,17 @@ declare
   local_now timestamp;
   due_time time;
 begin
+  -- Validate values even if an older table was created without CHECK constraints.
+  if new.prayer not in ('fajr', 'dhuhr', 'asr', 'maghrib', 'isha') then
+    raise exception 'invalid_prayer' using errcode = '22023';
+  end if;
+  if new.status not in ('pending', 'completed', 'missed') then
+    raise exception 'invalid_prayer_status' using errcode = '22023';
+  end if;
+  if new.source not in ('live', 'manual') then
+    raise exception 'invalid_prayer_source' using errcode = '22023';
+  end if;
+
   -- لا تسمح بتغيير مالك السجل أو هويته عبر UPDATE.
   if tg_op = 'UPDATE' then
     if new.user_id is distinct from old.user_id
@@ -220,10 +231,23 @@ begin
     end if;
   end if;
 
-  new.added_at := now();
-  if new.status = 'completed' and
-     (tg_op = 'INSERT' or old.status is distinct from 'completed') then
-    new.completed_at := now();
+  if tg_op = 'INSERT' then
+    new.added_at := now();
+    if new.status = 'completed' then
+      new.completed_at := now();
+    else
+      new.completed_at := null;
+    end if;
+  else
+    -- Keep server-owned timestamps stable; clients cannot rewrite them.
+    new.added_at := old.added_at;
+    if new.status = 'completed' and old.status is distinct from 'completed' then
+      new.completed_at := now();
+    elsif new.status = 'completed' then
+      new.completed_at := old.completed_at;
+    else
+      new.completed_at := null;
+    end if;
   end if;
   return new;
 end;
