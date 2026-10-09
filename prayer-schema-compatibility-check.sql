@@ -33,7 +33,7 @@ left join information_schema.columns c
  and c.column_name = e.column_name
 order by e.table_name, e.column_name;
 
--- 3) هل يوجد مفتاح فريد يدعم upsert onConflict(user_id,date,prayer)؟
+-- 3) افحص الفهارس بأمان حتى لو كان prayer_logs غير موجود.
 select i.relname as index_name, pg_get_indexdef(ix.indexrelid) as definition
 from pg_index ix
 join pg_class t on t.oid = ix.indrelid
@@ -44,24 +44,10 @@ where n.nspname = 'public'
   and ix.indisunique
 order by i.relname;
 
--- 4) اكتشاف سجلات مكررة قبل إنشاء أي unique index.
--- النتيجة الفارغة تعني عدم العثور على تكرارات؛ لا تحذف التكرارات تلقائيًا.
-select user_id, date, prayer, count(*) as duplicate_count
-from public.prayer_logs
-group by user_id, date, prayer
-having count(*) > 1
-order by duplicate_count desc, date desc
-limit 100;
-
--- 5) قيم status/source الموجودة فعليًا، لتفادي إضافة CHECK يخالف البيانات القديمة.
-select 'status' as field_name, status as field_value, count(*) as row_count
-from public.prayer_logs
-group by status
-union all
-select 'source' as field_name, source as field_value, count(*) as row_count
-from public.prayer_logs
-group by source
-order by field_name, row_count desc;
+-- 4) ملاحظة: الاستعلامات التي تقرأ الصفوف الفعلية يجب تشغيلها فقط
+-- بعد التأكد أن الجدول وأعمدته موجودة من نتائج القسمين 1 و2.
+-- لا تشغّل استعلام التكرارات أو قيم status/source على جدول غير موجود
+-- أو قبل التأكد من وجود الأعمدة المطلوبة.
 
 -- 6) سياسات RLS الحالية على الجداول الثلاثة.
 select schemaname, tablename, policyname, permissive, roles, cmd, qual, with_check
@@ -70,7 +56,7 @@ where schemaname = 'public'
   and tablename in ('profiles','prayer_logs','prayer_times_cache')
 order by tablename, policyname;
 
--- 7) المشغلات والدوال المرتبطة بسجل الصلاة؛ لا تعرض بيانات المستخدمين.
+-- 5) المشغلات والدوال المرتبطة بسجل الصلاة؛ لا تعرض بيانات المستخدمين.
 select tr.trigger_name, tr.action_timing, tr.event_manipulation, tr.action_statement
 from information_schema.triggers tr
 where tr.event_object_schema = 'public'
