@@ -94,6 +94,13 @@ Deno.serve(async (req: Request) => {
       typeof timezone !== "string" || timezone.length > 80) {
     return reply(502, { error: "invalid_provider_response" });
   }
+  // Reject malformed provider metadata before it reaches the cache/DB trigger.
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+  } catch {
+    return reply(502, { error: "invalid_provider_timezone" });
+  }
+  if (payload?.code !== 200) return reply(502, { error: "prayer_times_provider_error" });
 
   const { error: writeError } = await admin.from("prayer_times_cache").upsert(
     { city, country, date, fajr, dhuhr, asr, maghrib, isha, tz: timezone },
